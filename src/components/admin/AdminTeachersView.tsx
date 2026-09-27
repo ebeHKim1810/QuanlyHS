@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
+import { apiRequest } from '../../services/apiClient';
 import {
   ShieldAlert,
   Search,
@@ -52,18 +53,17 @@ export const AdminTeachersView: React.FC = () => {
     if (!token) return;
     try {
       setIsLoading(true);
-      const res = await fetch('/api/admin/teachers', {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiRequest<{ teachers: AdminTeacherRecord[] }>('/api/admin/teachers', {
+        token,
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        setTeachers(data.teachers || []);
+      if (res.ok && res.data) {
+        setTeachers(res.data.teachers || []);
       } else {
-        addToast('Lỗi tải danh sách giáo viên', 'Không thể lấy dữ liệu quản trị', 'error');
+        addToast('Lỗi tải danh sách giáo viên', res.error || 'Không thể lấy dữ liệu quản trị', 'error');
       }
     } catch (err: any) {
-      addToast('Lỗi kết nối', err.message, 'error');
+      addToast('Lỗi kết nối', err?.message || 'Không thể kết nối đến máy chủ', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -77,12 +77,9 @@ export const AdminTeachersView: React.FC = () => {
   const handleToggleStatus = async (teacher: AdminTeacherRecord) => {
     const nextStatus = teacher.accountStatus === 'ACTIVE' ? 'DISABLED' : 'ACTIVE';
     try {
-      const res = await fetch('/api/admin/teachers/status', {
+      const res = await apiRequest('/api/admin/teachers/status', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        token,
         body: JSON.stringify({ teacherId: teacher.id, status: nextStatus }),
       });
 
@@ -93,6 +90,8 @@ export const AdminTeachersView: React.FC = () => {
           'success'
         );
         fetchTeachers();
+      } else {
+        addToast('Lỗi cập nhật', res.error || 'Không thể cập nhật trạng thái', 'error');
       }
     } finally {
       setConfirmModalData(null);
@@ -102,18 +101,17 @@ export const AdminTeachersView: React.FC = () => {
   // Handle Safe Soft Delete
   const handleDeleteTeacher = async (teacher: AdminTeacherRecord) => {
     try {
-      const res = await fetch('/api/admin/teachers/delete', {
+      const res = await apiRequest('/api/admin/teachers/delete', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        token,
         body: JSON.stringify({ teacherId: teacher.id }),
       });
 
       if (res.ok) {
         addToast('Đã xóa giáo viên (Soft Delete)', `Đã chuyển tài khoản ${teacher.fullName} sang trạng thái ĐÃ XÓA. Lịch sử tài chính được bảo toàn nguyên vẹn.`, 'info');
         fetchTeachers();
+      } else {
+        addToast('Lỗi xóa giáo viên', res.error || 'Không thể thực hiện thao tác xóa', 'error');
       }
     } finally {
       setConfirmModalData(null);

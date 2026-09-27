@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "npx tsx test-runner.ts"
+    "test": "npx tsx test-runner.ts",
+    "start:server": "npx tsx server/standalone.ts"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",

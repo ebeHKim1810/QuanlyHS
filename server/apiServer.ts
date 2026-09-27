@@ -61,6 +61,37 @@ export function generate6DigitCode(): string {
 }
 
 /**
+ * Creates a stateless HMAC-signed session token for resilience across serverless invocations.
+ */
+export function createSessionToken(userId: string): string {
+  const secret = process.env.JWT_SECRET || process.env.AUTH_SECRET || 'tuition_manager_secret_salt_2026';
+  const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days
+  const payload = `${userId}.${expiresAt}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  return `tok_v2_${payload}.${sig}`;
+}
+
+export function verifySessionToken(token: string): { userId: string } | null {
+  if (!token) return null;
+  if (token.startsWith('tok_v2_')) {
+    const raw = token.slice(7);
+    const parts = raw.split('.');
+    if (parts.length === 3) {
+      const [userId, expiresAtStr, sig] = parts;
+      const expiresAt = parseInt(expiresAtStr, 10);
+      if (!isNaN(expiresAt) && Date.now() <= expiresAt) {
+        const secret = process.env.JWT_SECRET || process.env.AUTH_SECRET || 'tuition_manager_secret_salt_2026';
+        const expectedSig = crypto.createHmac('sha256', secret).update(`${userId}.${expiresAt}`).digest('hex');
+        if (sig === expectedSig) {
+          return { userId };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Transactional email sender
  * Uses SMTP / Resend if environment variables are provided,
  * otherwise logs to console and stores in devMailbox.
@@ -121,41 +152,99 @@ export async function sendTransactionalEmail(options: {
 
 /**
  * Database manager & migrator
+ * Supports disk file, serverless /tmp fallback, and in-memory caching.
  */
 export class DatabaseManager {
-  private dbDir: string;
-  private dbFile: string;
+  private primaryFile: string;
+  private fallbackFile: string;
+  private memoryData: any = null;
 
   constructor() {
-    this.dbDir = path.resolve(process.cwd(), 'data');
-    this.dbFile = path.resolve(this.dbDir, 'database.json');
-    if (!fs.existsSync(this.dbDir)) {
-      fs.mkdirSync(this.dbDir, { recursive: true });
-    }
+    this.primaryFile = path.resolve(process.cwd(), 'data', 'database.json');
+    const tmpDir = process.env.TMPDIR || '/tmp';
+    this.fallbackFile = path.resolve(tmpDir, 'tuition_database.json');
     this.ensureInitializedAndMigrated();
   }
 
-  getRawData(): any {
-    if (!fs.existsSync(this.dbFile)) return null;
-    try {
-      const data = JSON.parse(fs.readFileSync(this.dbFile, 'utf-8'));
-      if (data) {
-        if (!Array.isArray(data.users)) data.users = [];
-        if (!Array.isArray(data.students)) data.students = [];
-        if (!Array.isArray(data.schedules)) data.schedules = [];
-        if (!Array.isArray(data.lessons)) data.lessons = [];
-        if (!Array.isArray(data.invoices)) data.invoices = [];
-        if (!data.teacherSettingsMap) data.teacherSettingsMap = {};
-      }
-      return data;
-    } catch {
-      return null;
+  private sanitizeData(data: any): any {
+    if (!data || typeof data !== 'object') return null;
+    if (!Array.isArray(data.users)) data.users = [];
+    if (!Array.isArray(data.students)) data.students = [];
+    if (!Array.isArray(data.schedules)) data.schedules = [];
+    if (!Array.isArray(data.lessons)) data.lessons = [];
+    if (!Array.isArray(data.invoices)) data.invoices = [];
+    if (!data.teacherSettingsMap || typeof data.teacherSettingsMap !== 'object') {
+      data.teacherSettingsMap = {};
     }
+    return data;
+  }
+
+  getRawData(): any {
+    if (this.memoryData) {
+      return this.memoryData;
+    }
+
+    // 1. Try reading from fallback (/tmp) if previously saved in serverless session
+    if (fs.existsSync(this.fallbackFile)) {
+      try {
+        const raw = fs.readFileSync(this.fallbackFile, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed) {
+          this.memoryData = this.sanitizeData(parsed);
+          return this.memoryData;
+        }
+      } catch {
+        // Fall through
+      }
+    }
+
+    // 2. Try reading from primary file (data/database.json)
+    if (fs.existsSync(this.primaryFile)) {
+      try {
+        const raw = fs.readFileSync(this.primaryFile, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed) {
+          this.memoryData = this.sanitizeData(parsed);
+          return this.memoryData;
+        }
+      } catch {
+        // Fall through
+      }
+    }
+
+    return null;
   }
 
   saveRawData(data: any): void {
     data.lastUpdated = new Date().toISOString();
-    fs.writeFileSync(this.dbFile, JSON.stringify(data, null, 2), 'utf-8');
+    this.memoryData = this.sanitizeData(data);
+    const jsonStr = JSON.stringify(data, null, 2);
+
+    let written = false;
+    // Attempt 1: write to primary file
+    try {
+      const dir = path.dirname(this.primaryFile);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(this.primaryFile, jsonStr, 'utf-8');
+      written = true;
+    } catch {
+      // Primary disk is read-only (e.g. Vercel serverless /var/task)
+    }
+
+    // Attempt 2: write to writable /tmp directory
+    if (!written || process.env.VERCEL) {
+      try {
+        const dir = path.dirname(this.fallbackFile);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        fs.writeFileSync(this.fallbackFile, jsonStr, 'utf-8');
+      } catch {
+        // In-memory data is still safely retained
+      }
+    }
   }
 
   /**
@@ -295,28 +384,44 @@ export class DatabaseManager {
 
     if (needsSave) {
       this.saveRawData(data);
+    } else {
+      this.memoryData = this.sanitizeData(data);
     }
   }
 
-  // Get user by token
+  // Get user by token (supports HMAC stateless token and session map)
   getUserByToken(token: string): UserRecord | null {
     if (!token) return null;
-    const session = sessionsMap.get(token);
-    if (!session) return null;
-    if (Date.now() > session.expiresAt) {
-      sessionsMap.delete(token);
-      return null;
-    }
 
     const data = this.getRawData();
     if (!data || !Array.isArray(data.users)) return null;
-    const user = data.users.find((u: UserRecord) => u.id === session.userId);
-    return user || null;
+
+    // 1. Try verifying stateless HMAC token
+    const tokenPayload = verifySessionToken(token);
+    if (tokenPayload) {
+      const user = data.users.find((u: UserRecord) => u.id === tokenPayload.userId || u.userId === tokenPayload.userId);
+      if (user && user.accountStatus !== 'DELETED') {
+        return user;
+      }
+    }
+
+    // 2. Check in-memory sessions map
+    const session = sessionsMap.get(token);
+    if (session) {
+      if (Date.now() > session.expiresAt) {
+        sessionsMap.delete(token);
+        return null;
+      }
+      const user = data.users.find((u: UserRecord) => u.id === session.userId);
+      return user || null;
+    }
+
+    return null;
   }
 
   // Create session for user
   createSession(user: UserRecord): string {
-    const token = generateToken();
+    const token = createSessionToken(user.id);
     const now = Date.now();
     const session: StoredSession = {
       token,

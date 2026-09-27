@@ -1,5 +1,6 @@
 import { AppDatabase } from '../types';
 import { getDemoDatabase } from './demoData';
+import { apiRequest } from './apiClient';
 
 const BASE_STORAGE_KEY = 'TUITION_MANAGER_DB_V2';
 const AUTH_TOKEN_KEY = 'TUITION_AUTH_TOKEN_V2';
@@ -42,21 +43,20 @@ export class StorageService {
     this.activeToken = currentToken;
     const storageKey = this.getStorageKey();
 
-    // 1. Try fetching from server disk API (/api/db) with Bearer token
+    // 1. Try fetching from server API (/api/db) with Bearer token using centralized apiClient
     try {
-      const headers: Record<string, string> = {};
-      if (currentToken) {
-        headers['Authorization'] = `Bearer ${currentToken}`;
-      }
+      const res = await apiRequest<AppDatabase>('/api/db', {
+        token: currentToken,
+      });
 
-      const res = await fetch('/api/db', { headers });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.version && Array.isArray(data.students)) {
-          this.cachedDb = data;
-          localStorage.setItem(storageKey, JSON.stringify(data));
-          return data;
+      if (res.ok && res.data && res.data.version && Array.isArray(res.data.students)) {
+        this.cachedDb = res.data;
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(res.data));
+        } catch {
+          // Ignore localStorage errors
         }
+        return res.data;
       }
     } catch {
       // Backend api offline or static deploy - fall through to localStorage
@@ -104,19 +104,14 @@ export class StorageService {
   }
 
   /**
-   * Sync data to /api/db server disk with Bearer auth token
+   * Sync data to /api/db server with Bearer auth token
    */
   private static async syncToServer(db: AppDatabase): Promise<boolean> {
     try {
       const currentToken = this.getToken();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (currentToken) {
-        headers['Authorization'] = `Bearer ${currentToken}`;
-      }
-
-      const res = await fetch('/api/db', {
+      const res = await apiRequest('/api/db', {
         method: 'POST',
-        headers,
+        token: currentToken,
         body: JSON.stringify(db, null, 2),
       });
       return res.ok;

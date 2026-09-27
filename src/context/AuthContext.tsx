@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { UserProfile, ThemePreference } from '../types';
+import { UserProfile } from '../types';
+import { apiRequest } from '../services/apiClient';
 
 export interface RegisterFormData {
   fullName: string;
@@ -71,22 +72,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       try {
-        const res = await fetch('/api/auth/me', {
-          headers: {
-            Authorization: `Bearer ${storedToken}`,
-          },
+        const res = await apiRequest('/api/auth/me', {
+          token: storedToken,
         });
 
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.user) {
-            setUser(data.user);
-            setToken(storedToken);
-          } else {
-            localStorage.removeItem(AUTH_TOKEN_KEY);
-            setToken(null);
-            setUser(null);
-          }
+        if (res.ok && res.data?.user) {
+          setUser(res.data.user);
+          setToken(storedToken);
         } else {
           localStorage.removeItem(AUTH_TOKEN_KEY);
           setToken(null);
@@ -104,47 +96,49 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const login = async (email: string, password: string) => {
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await apiRequest('/api/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        if (data.accountStatus === 'PENDING_VERIFICATION') {
-          setPendingEmailForVerification(data.email || email);
+      const resData = res.data;
+      if (!res.ok || !resData?.success) {
+        const accountStatus = resData?.accountStatus;
+        if (accountStatus === 'PENDING_VERIFICATION') {
+          setPendingEmailForVerification(resData?.email || email);
         }
         return {
           success: false,
-          error: data.error || 'Email hoặc mật khẩu không đúng.',
-          accountStatus: data.accountStatus,
+          error: res.error || resData?.error || 'Email hoặc mật khẩu không đúng.',
+          accountStatus,
         };
       }
 
-      setToken(data.token);
-      setUser(data.user);
-      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      setToken(resData.token);
+      setUser(resData.user);
+      localStorage.setItem(AUTH_TOKEN_KEY, resData.token);
       setPendingEmailForVerification(null);
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: 'Không thể kết nối đến máy chủ: ' + err.message };
+      return {
+        success: false,
+        error: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra máy chủ API hoặc cấu hình triển khai.',
+      };
     }
   };
 
   const register = async (data: RegisterFormData) => {
     try {
-      const res = await fetch('/api/auth/register', {
+      const res = await apiRequest('/api/auth/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
 
-      const resData = await res.json();
-      if (!res.ok || !resData.success) {
+      const resData = res.data;
+      if (!res.ok || !resData?.success) {
         return {
           success: false,
-          error: resData.error || 'Đăng ký thất bại.',
+          error: res.error || resData?.error || 'Đăng ký thất bại.',
         };
       }
 
@@ -155,86 +149,98 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         verificationCode: resData.verificationCode,
       };
     } catch (err: any) {
-      return { success: false, error: 'Lỗi đăng ký: ' + err.message };
+      return {
+        success: false,
+        error: 'Lỗi đăng ký: ' + (err?.message || 'Không thể kết nối đến máy chủ.'),
+      };
     }
   };
 
   const verifyEmail = async (params: { email?: string; code?: string; token?: string }) => {
     try {
-      const res = await fetch('/api/auth/verify', {
+      const res = await apiRequest('/api/auth/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
+      const resData = res.data;
+      if (!res.ok || !resData?.success) {
         return {
           success: false,
-          error: data.error || 'Mã xác minh không chính xác hoặc đã hết hạn.',
+          error: res.error || resData?.error || 'Mã xác minh không chính xác hoặc đã hết hạn.',
         };
       }
 
-      setToken(data.token);
-      setUser(data.user);
-      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      setToken(resData.token);
+      setUser(resData.user);
+      localStorage.setItem(AUTH_TOKEN_KEY, resData.token);
       setPendingEmailForVerification(null);
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: 'Lỗi xác minh: ' + err.message };
+      return {
+        success: false,
+        error: 'Lỗi xác minh: ' + (err?.message || 'Không thể kết nối đến máy chủ.'),
+      };
     }
   };
 
   const resendVerification = async (email: string) => {
     try {
-      const res = await fetch('/api/auth/resend-verification', {
+      const res = await apiRequest('/api/auth/resend-verification', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        return { success: false, error: data.error || 'Không thể gửi lại mã xác minh.' };
+      const resData = res.data;
+      if (!res.ok || !resData?.success) {
+        return {
+          success: false,
+          error: res.error || resData?.error || 'Không thể gửi lại mã xác minh.',
+        };
       }
 
-      return { success: true, message: data.message };
+      return { success: true, message: resData.message };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      return { success: false, error: err?.message || 'Không thể kết nối đến máy chủ.' };
     }
   };
 
   const forgotPassword = async (email: string) => {
     try {
-      const res = await fetch('/api/auth/forgot-password', {
+      const res = await apiRequest('/api/auth/forgot-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
       });
 
-      const data = await res.json();
-      return { success: true, message: data.message };
+      const resData = res.data;
+      return {
+        success: res.ok,
+        message: resData?.message || res.message || 'Nếu email tồn tại trong hệ thống, hướng dẫn đặt lại mật khẩu đã được gửi đến bạn.',
+        error: !res.ok ? res.error : undefined,
+      };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      return { success: false, error: err?.message || 'Không thể kết nối đến máy chủ.' };
     }
   };
 
-  const resetPassword = async (token: string, newPassword: string) => {
+  const resetPassword = async (resetToken: string, newPassword: string) => {
     try {
-      const res = await fetch('/api/auth/reset-password', {
+      const res = await apiRequest('/api/auth/reset-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, newPassword }),
+        body: JSON.stringify({ token: resetToken, newPassword }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        return { success: false, error: data.error || 'Đặt lại mật khẩu thất bại.' };
+      const resData = res.data;
+      if (!res.ok || !resData?.success) {
+        return {
+          success: false,
+          error: res.error || resData?.error || 'Đặt lại mật khẩu thất bại.',
+        };
       }
 
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      return { success: false, error: err?.message || 'Không thể kết nối đến máy chủ.' };
     }
   };
 
@@ -242,33 +248,33 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!token) return { success: false, error: 'Chưa đăng nhập.' };
 
     try {
-      const res = await fetch('/api/auth/update-profile', {
+      const res = await apiRequest('/api/auth/update-profile', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        token,
         body: JSON.stringify(updateData),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        return { success: false, error: data.error || 'Cập nhật thất bại.' };
+      const resData = res.data;
+      if (!res.ok || !resData?.success) {
+        return {
+          success: false,
+          error: res.error || resData?.error || 'Cập nhật thất bại.',
+        };
       }
 
-      setUser(data.user);
+      setUser(resData.user);
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      return { success: false, error: err?.message || 'Không thể kết nối đến máy chủ.' };
     }
   };
 
   const logout = async () => {
     if (token) {
       try {
-        await fetch('/api/auth/logout', {
+        await apiRequest('/api/auth/logout', {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
+          token,
         });
       } catch {
         // Ignore
