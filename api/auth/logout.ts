@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { healthController } from '../server/controllers.ts';
+import { logoutController } from '../../server/controllers.ts';
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
-  await healthController(req, res);
+  await logoutController(req, res);
 }

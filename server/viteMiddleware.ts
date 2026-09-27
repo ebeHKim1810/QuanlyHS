@@ -359,8 +359,8 @@ export async function handleApiRequest(req: any, res: any, next?: () => void): P
     });
   }
 
-  // 5. POST /api/auth/login
-  if (matches('/api/auth/login') && method === 'POST') {
+  // 5. POST /api/auth/login or POST /api/login
+  if ((matches('/api/auth/login') || matches('/api/login')) && method === 'POST') {
     return parseBody((body) => {
       const { email, password } = body;
       if (!email || !password) {

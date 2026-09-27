@@ -96,10 +96,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const login = async (email: string, password: string) => {
     try {
-      const res = await apiRequest('/api/auth/login', {
+      let res = await apiRequest('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
+
+      // Seamless fallback if backend is mounted directly at /api/login
+      if (!res.ok && res.status === 404) {
+        res = await apiRequest('/api/login', {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        });
+      }
 
       const resData = res.data;
       if (!res.ok || !resData?.success) {

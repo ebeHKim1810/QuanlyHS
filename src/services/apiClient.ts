@@ -1,6 +1,6 @@
 /**
  * Centralized API Client & Safe Request Helper
- * Guarantees safe parsing, informative errors, and prevents "Unexpected token 'T'" crashes.
+ * Guarantees safe parsing, informative errors, diagnostics logging, and prevents "Unexpected token 'T'" crashes.
  */
 import { getApiEndpoint } from '../config/api';
 
@@ -17,7 +17,8 @@ export interface ApiRequestOptions extends RequestInit {
 }
 
 /**
- * Perform a safe API request with automatic header injection and safe JSON/text parsing.
+ * Perform a safe API request with automatic header injection, safe JSON/text parsing,
+ * and comprehensive diagnostic logging.
  */
 export async function apiRequest<T = any>(
   endpoint: string,
@@ -25,6 +26,7 @@ export async function apiRequest<T = any>(
 ): Promise<ApiResponse<T>> {
   const fullUrl = getApiEndpoint(endpoint);
   const { token, ...fetchOptions } = options;
+  const method = (fetchOptions.method || 'GET').toUpperCase();
 
   const headers = new Headers(fetchOptions.headers || {});
 
@@ -97,9 +99,11 @@ export async function apiRequest<T = any>(
         errorMessage = rawText.trim();
       }
 
-      if (import.meta.env.DEV) {
-        console.warn(`[API ${res.status}] ${fullUrl}:`, errorMessage);
-      }
+      // Safe Diagnostic Logging (Never log passwords or auth secrets)
+      const safePreview = rawText.length > 250 ? rawText.substring(0, 250) + '...' : rawText;
+      console.warn(
+        `[API ERROR]\n${method} ${fullUrl}\nStatus: ${res.status}\nError: ${errorMessage}\nResponse preview: ${safePreview}`
+      );
 
       return {
         ok: false,
@@ -117,9 +121,10 @@ export async function apiRequest<T = any>(
       message: parsedJson?.message,
     };
   } catch (err: any) {
-    if (import.meta.env.DEV) {
-      console.error(`[API Network Error] ${fullUrl}:`, err);
-    }
+    console.error(
+      `[API NETWORK ERROR]\n${method} ${fullUrl}\nError: ${err?.message || 'Không thể kết nối đến máy chủ.'}`
+    );
+
     return {
       ok: false,
       status: 0,
